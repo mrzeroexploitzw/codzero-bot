@@ -10,9 +10,10 @@ module.exports = [
     aliases: ["commands", "help"],
     description: "Show all available commands",
     category: "fun",
-    async execute({ sock, from, allCommands }) {
+    async execute({ sock, from, commands }) {
       const byCategory = {};
-      for (const cmd of allCommands) {
+      const uniqueCommands = [...new Set(commands.values())];
+      for (const cmd of uniqueCommands) {
         byCategory[cmd.category] = byCategory[cmd.category] || [];
         byCategory[cmd.category].push(cmd.name);
       }

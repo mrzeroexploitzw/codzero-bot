@@ -1,0 +1,22 @@
+# Session files (contains auth keys — never share these)
+session/
+
+# Data files (warnings, blacklist, etc.)
+data/
+
+# Environment and config overrides
+.env
+
+# Node modules
+node_modules/
+
+# Backup zips
+*.zip
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db

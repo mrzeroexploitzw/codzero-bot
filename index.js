@@ -1,149 +1,237 @@
 // ============================================================
-//  CODZERO — commands/core/*.js  (Core / Owner commands)
+//  CODZERO — index.js  (Main entry: connection, pairing, router)
+//  Developer: MRZEROEXPLOIT & PAYOEBOI
 // ============================================================
+const { showBanner } = require("./codzero-banner");
 const fs = require("fs-extra");
 const path = require("path");
-const config = require("../../config");
+const readline = require("readline");
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  Browsers
+} = require("@whiskeysockets/baileys");
+const pino = require("pino");
 
-const isOwner = (sender, ownerNumbers) => ownerNumbers.includes(sender);
+const config = require("./config");
+const db = require("./lib/db");
 
-module.exports = [
-  {
-    name: "ping",
-    aliases: [],
-    description: "Check if the bot is alive and response speed",
-    category: "core",
-    ownerOnly: false,
-    async execute({ sock, msg, from }) {
-      const start = Date.now();
-      const sent = await sock.sendMessage(from, { text: "🏓 Pinging..." }, { quoted: msg });
-      const ms = Date.now() - start;
-      await sock.sendMessage(from, { text: `🏓 Pong! ${ms}ms`, edit: sent.key }).catch(() => {
-        sock.sendMessage(from, { text: `🏓 Pong! ${ms}ms` });
-      });
-    }
-  },
-  {
-    name: "uptime",
-    aliases: [],
-    description: "Show how long the bot has been running",
-    category: "core",
-    async execute({ sock, from }) {
-      const s = process.uptime();
-      const h = Math.floor(s / 3600);
-      const m = Math.floor((s % 3600) / 60);
-      const sec = Math.floor(s % 60);
-      await sock.sendMessage(from, { text: `⏱️ Uptime: ${h}h ${m}m ${sec}s` });
-    }
-  },
-  {
-    name: "mode",
-    aliases: [],
-    description: "Set bot mode: public or private (owner only)",
-    category: "core",
-    ownerOnly: true,
-    async execute({ sock, from, args, runtimeConfig }) {
-      const choice = (args[0] || "").toLowerCase();
-      if (!["public", "private"].includes(choice)) {
-        return sock.sendMessage(from, { text: "Usage: .mode public | .mode private" });
-      }
-      runtimeConfig.mode = choice;
-      await sock.sendMessage(from, { text: `✅ Bot mode set to *${choice}*` });
-    }
-  },
-  {
-    name: "restart",
-    aliases: [],
-    description: "Restart the bot process (owner only, requires process manager)",
-    category: "core",
-    ownerOnly: true,
-    async execute({ sock, from }) {
-      await sock.sendMessage(from, { text: "♻️ Restarting CODZERO..." });
-      setTimeout(() => process.exit(0), 1000);
-      // Note: use `bash autorun.sh` or pm2/termux-services so the process
-      // actually comes back up after exit. See README section "Keeping it alive".
-    }
-  },
-  {
-    name: "broadcast",
-    aliases: ["bc"],
-    description: "Send a message to all groups the bot is in (owner only)",
-    category: "core",
-    ownerOnly: true,
-    async execute({ sock, from, args, sock_groupList }) {
-      const text = args.join(" ");
-      if (!text) return sock.sendMessage(from, { text: "Usage: .broadcast <message>" });
-      const groups = await sock.groupFetchAllParticipating();
-      const ids = Object.keys(groups);
-      let count = 0;
-      for (const gid of ids) {
-        try {
-          await sock.sendMessage(gid, { text: `📢 *Broadcast from ${config.botName}*\n\n${text}` });
-          count++;
-          await new Promise(r => setTimeout(r, 1500)); // throttle to avoid spam flags
-        } catch (e) {}
-      }
-      await sock.sendMessage(from, { text: `✅ Broadcast sent to ${count} group(s).` });
-    }
-  },
-  {
-    name: "setpp",
-    aliases: ["setprofilepic"],
-    description: "Set bot's WhatsApp profile picture. Reply to an image with this command.",
-    category: "core",
-    ownerOnly: true,
-    async execute({ sock, from, msg }) {
-      const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-      const target = quoted?.imageMessage ? quoted : msg.message?.imageMessage ? msg.message : null;
-      if (!target) {
-        return sock.sendMessage(from, { text: "📸 Reply to an image with *.setpp* to set it as the bot's profile picture." });
-      }
-      try {
-        const { downloadMediaMessage } = require("@whiskeysockets/baileys");
-        const fakeMsg = quoted?.imageMessage
-          ? { message: quoted, key: msg.message.extendedTextMessage.contextInfo }
-          : msg;
-        const buffer = await downloadMediaMessage(fakeMsg, "buffer", {});
-        await sock.updateProfilePicture(sock.user.id, buffer);
-        await sock.sendMessage(from, { text: "✅ Profile picture updated." });
-      } catch (e) {
-        await sock.sendMessage(from, { text: "❌ Failed to set profile picture: " + e.message });
-      }
-    }
-  },
-  {
-    name: "setbio",
-    aliases: [],
-    description: "Set the bot's WhatsApp About/status text (owner only)",
-    category: "core",
-    ownerOnly: true,
-    async execute({ sock, from, args }) {
-      const text = args.join(" ");
-      if (!text) return sock.sendMessage(from, { text: "Usage: .setbio <text>" });
-      try {
-        await sock.updateProfileStatus(text);
-        await sock.sendMessage(from, { text: "✅ Bio updated." });
-      } catch (e) {
-        await sock.sendMessage(from, { text: "❌ Failed: " + e.message });
-      }
-    }
-  },
-  {
-    name: "eval",
-    aliases: [">"],
-    description: "Run a raw JS snippet (owner only, sandboxed to this process — use with care)",
-    category: "core",
-    ownerOnly: true,
-    async execute({ sock, from, args, msg, sock_self }) {
-      const code = args.join(" ");
-      if (!code) return sock.sendMessage(from, { text: "Usage: .eval <code>" });
-      try {
-        let result = await eval(`(async () => { ${code} })()`);
-        if (typeof result !== "string") result = require("util").inspect(result);
-        await sock.sendMessage(from, { text: "```" + result.slice(0, 2000) + "```" });
-      } catch (e) {
-        await sock.sendMessage(from, { text: "❌ Error: " + e.message });
-      }
+const SESSION_DIR = path.join(__dirname, "session");
+fs.ensureDirSync(SESSION_DIR);
+
+const commandFiles = {
+  core: require("./commands/core/index.js"),
+  group: require("./commands/group/index.js"),
+  utility: require("./commands/utility/index.js"),
+  fun: require("./commands/fun/index.js"),
+  info: require("./commands/info/index.js"),
+  web: require("./commands/web/index.js"),
+  utility2: require("./commands/utility2/index.js"),
+  toys: require("./commands/toys/index.js"),
+  media2: require("./commands/media2/index.js"),
+  groupadmin: require("./commands/groupadmin/index.js"),
+  premiumadmin: require("./commands/premiumadmin/index.js")
+};
+
+const commands = new Map();
+for (const category of Object.values(commandFiles)) {
+  for (const cmd of category) {
+    commands.set(cmd.name, cmd);
+    if (Array.isArray(cmd.aliases)) {
+      for (const alias of cmd.aliases) commands.set(alias, cmd);
     }
   }
-];
+}
+
+function ask(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => rl.question(question, (answer) => { rl.close(); resolve(answer.trim()); }));
+}
+
+function isOwner(jid) {
+  return config.ownerNumbers.includes(jid);
+}
+
+let retries = 0;
+
+async function startBot() {
+  const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+  const { version } = await fetchLatestBaileysVersion();
+
+  const sock = makeWASocket({
+    version,
+    auth: state,
+    printQRInTerminal: false,
+    logger: pino({ level: "silent" }),
+    browser: Browsers.ubuntu("Chrome")
+  });
+
+  if (!sock.authState.creds.registered) {
+    const phoneNumber = await ask(
+      "\n[CODZERO] Enter your WhatsApp number with country code, no + and no spaces (e.g. 263780706627): "
+    );
+    try {
+      const code = await sock.requestPairingCode(phoneNumber.replace(/[^0-9]/g, ""));
+      console.log("\n[CODZERO] Your pairing code: " + code);
+      console.log("On your phone: WhatsApp > Settings > Linked Devices > Link a Device > Link with phone number instead\n");
+    } catch (e) {
+      console.error("[CODZERO] Failed to request pairing code:", e.message);
+    }
+  }
+
+  sock.ev.on("creds.update", saveCreds);
+
+  sock.ev.on("connection.update", async (update) => {
+    const { connection, lastDisconnect } = update;
+
+    if (connection === "open") {
+      retries = 0;
+      console.log("\x1b[38;5;46m\x1b[1m[CODZERO] ✅ Connected as " + config.botName + ". " + commands.size + " command aliases loaded.\x1b[0m");
+      try {
+        if (config.ownerNumbers[0]) {
+          await sock.sendMessage(config.ownerNumbers[0], {
+            text: "*" + config.botName + "* is online and connected.\nDeveloper: " + config.developer + "\nPrefix: " + config.prefix + "\nSend *.menu* to see all commands."
+          });
+        }
+      } catch (e) {}
+    }
+
+    if (connection === "close") {
+      const statusCode = lastDisconnect?.error?.output?.statusCode;
+      const loggedOut = statusCode === DisconnectReason.loggedOut;
+
+      if (loggedOut) {
+        console.log("\x1b[38;5;196m[CODZERO] Logged out. Delete the session/ folder and re-pair.\x1b[0m");
+        return;
+      }
+
+      retries++;
+      if (retries > config.reconnect.maxRetries) {
+        console.log("\x1b[38;5;196m[CODZERO] Max reconnect attempts reached. Exiting.\x1b[0m");
+        process.exit(1);
+      }
+      console.log("\x1b[38;5;214m[CODZERO] Connection closed. Reconnecting (" + retries + "/" + config.reconnect.maxRetries + ")...\x1b[0m");
+      setTimeout(startBot, config.reconnect.retryDelayMs);
+    }
+  });
+
+  sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    if (type !== "notify") return;
+    const msg = messages[0];
+    if (!msg.message || msg.key.fromMe) return;
+
+    const from = msg.key.remoteJid;
+    const sender = msg.key.participant || msg.key.remoteJid;
+    const isGroup = from.endsWith("@g.us");
+
+    const body =
+      msg.message.conversation ||
+      msg.message.extendedTextMessage?.text ||
+      msg.message.imageMessage?.caption ||
+      msg.message.videoMessage?.caption ||
+      "";
+
+    if (isGroup) {
+      try {
+        const settings = db.getGroupSettings(from);
+        const groupMeta = await sock.groupMetadata(from);
+        const participantObj = groupMeta.participants.find((p) => p.id === sender);
+        const senderIsAdmin = participantObj && (participantObj.admin === "admin" || participantObj.admin === "superadmin");
+
+        if (settings.antilink && !senderIsAdmin && !isOwner(sender)) {
+          const linkRegex = /(https?:\/\/|chat\.whatsapp\.com|wa\.me)/i;
+          if (linkRegex.test(body)) {
+            await sock.sendMessage(from, { delete: msg.key });
+            const warnCount = db.addWarning(from, sender);
+            if (warnCount >= config.antilink.maxWarnings) {
+              await sock.groupParticipantsUpdate(from, [sender], "remove");
+              db.resetWarnings(from, sender);
+              await sock.sendMessage(from, { text: "Removed @" + sender.split("@")[0] + " for repeated link sharing.", mentions: [sender] });
+            } else {
+              await sock.sendMessage(from, { text: "@" + sender.split("@")[0] + " links are not allowed here. Warning " + warnCount + "/" + config.antilink.maxWarnings + ".", mentions: [sender] });
+            }
+            return;
+          }
+        }
+
+        if (settings.antispam && !senderIsAdmin && !isOwner(sender)) {
+          const record = db.getSpamRecord(from, sender);
+          const now = Date.now();
+          if (record.mutedUntil > now) return;
+          record.timestamps = record.timestamps.filter((t) => now - t < config.antispam.windowSeconds * 1000);
+          record.timestamps.push(now);
+          if (record.timestamps.length > config.antispam.maxMessages) {
+            record.mutedUntil = now + config.antispam.muteSeconds * 1000;
+            db.setSpamRecord(from, sender, record);
+            await sock.sendMessage(from, { text: "@" + sender.split("@")[0] + " muted for " + config.antispam.muteSeconds + "s (spam detected).", mentions: [sender] });
+            return;
+          }
+          db.setSpamRecord(from, sender, record);
+        }
+      } catch (e) {
+        console.error("[CODZERO] Group pre-processing error:", e.message);
+      }
+    }
+
+    if (!body.startsWith(config.prefix)) return;
+    const args = body.slice(config.prefix.length).trim().split(/\s+/);
+    const cmdName = args.shift().toLowerCase();
+    const cmd = commands.get(cmdName);
+    if (!cmd) return;
+
+    if (cmd.ownerOnly && !isOwner(sender)) {
+      await sock.sendMessage(from, { text: "This command is owner-only." });
+      return;
+    }
+    if (config.mode === "private" && !isOwner(sender)) {
+      return;
+    }
+
+    try {
+      await cmd.execute({ sock, from, sender, args, msg, isGroup, config, db, commands });
+    } catch (e) {
+      console.error("[CODZERO] Error in command \"" + cmdName + "\":", e);
+      await sock.sendMessage(from, { text: "Error running ." + cmdName + ": " + e.message });
+    }
+  });
+
+  sock.ev.on("group-participants.update", async (update) => {
+    try {
+      const settings = db.getGroupSettings(update.id);
+      const groupMeta = await sock.groupMetadata(update.id);
+      for (const p of update.participants) {
+        const participant = typeof p === "string" ? p : p.id;
+        if (update.action === "add" && settings.welcome) {
+          const text = settings.welcomeMsg
+            ? settings.welcomeMsg.replace("{user}", "@" + participant.split("@")[0]).replace("{group}", groupMeta.subject)
+            : "Welcome @" + participant.split("@")[0] + " to *" + groupMeta.subject + "*!";
+          await sock.sendMessage(update.id, { text, mentions: [participant] });
+        }
+        if (update.action === "remove" && settings.bye) {
+          const text = settings.byeMsg
+            ? settings.byeMsg.replace("{user}", "@" + participant.split("@")[0]).replace("{group}", groupMeta.subject)
+            : "@" + participant.split("@")[0] + " left the group.";
+          await sock.sendMessage(update.id, { text, mentions: [participant] });
+        }
+      }
+    } catch (e) {
+      console.error("[CODZERO] Welcome/Bye error:", e.message);
+    }
+  });
+
+  return sock;
+}
+
+process.on("uncaughtException", (err) => {
+  console.error("[CODZERO] Uncaught exception (auto-fix: continuing):", err.message);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("[CODZERO] Unhandled rejection (auto-fix: continuing):", err);
+});
+
+(async () => {
+  await showBanner();
+  startBot();
+})();
