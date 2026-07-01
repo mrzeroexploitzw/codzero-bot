@@ -3,6 +3,7 @@
 //  Developer: MRZEROEXPLOIT & PAYOEBOI
 // ============================================================
 const { showBanner } = require("./codzero-banner");
+const { autoAIReply } = require("./commands/ai/auto");
 const fs = require("fs-extra");
 const path = require("path");
 const readline = require("readline");
